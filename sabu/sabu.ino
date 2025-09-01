@@ -1,6 +1,7 @@
 #include <FlexCAN_T4.h>
 #include <Wire.h>  // I2C通信を行うためのライブラリ
 #include <Adafruit_PWMServoDriver.h>  // PCA9685を使うためのAdafruit公式ライブラリ
+#include "motor.h"
 //SDA（データ） → Teensy 4.0 の ピン 18
 //SCL（クロック） → Teensy 4.0 の ピン 19
 // PCA9685のインスタンスを作成（I2Cアドレス0x40をデフォルトとして使用）
@@ -23,35 +24,28 @@ FlexCAN_T4<CAN1, RX_SIZE_256, TX_SIZE_16> Can0;
 uint8_t servonum = 0;
 uint8_t servonum1 = 1;
 
-constexpr int motor_id_gm = 1;
-constexpr uint32_t can_tx_id_gm = 0x1FF;
-constexpr uint32_t mode_switch_id_gm = 0x700 + motor_id_gm;
-
-constexpr int motor_id_1 = 1;
-constexpr uint32_t can_tx_id = 0x200;
-constexpr uint32_t mode_switch_id_1 = 0x700 + motor_id_1;
-
-constexpr int motor_id_2 = 2;
-constexpr uint32_t mode_switch_id_2 = 0x700 + motor_id_2;
+motor motor_1;
+motor motor_2;
+motor motor_gm;
 
 float current_A = 0.0;  // 初期電流
 
-int d_in0=7; //もともと10  7
-int d_in1=8; //もともと9  8
-int d_in2=9; //もともと8  9
-int d_in3=10; //もともと7  10
+int d_in0 = 7; //もともと10  7
+int d_in1 = 8; //もともと9  8
+int d_in2 = 9; //もともと8  9
+int d_in3 = 10; //もともと7  10
 
-int d_in0_state=0,d_in1_state=0,d_in2_state=0,d_in3_state=0;//ESP32の出力が接続されたピン
+int d_in0_state = 0, d_in1_state = 0, d_in2_state = 0, d_in3_state=0;//ESP32の出力が接続されたピン
 int d_integrated=0;//ESP32の信号を統合したもの(現在4ビット)
 
 uint16_t microsec = 1500;
 uint16_t microsec1 = 1500;
 
 // モード切り替えコマンド（最初に1回送る）
-void send_mode_switch_command() {
+void send_mode_switch_command(struct motor &data_1, struct motor &data_2) {
   CAN_message_t msg;
-  msg.id = mode_switch_id_1;
-  msg.id = mode_switch_id_2;
+  msg.id = data_1.mode_switch_id;
+  msg.id = data_2.mode_switch_id;
   msg.len = 8;
   msg.flags.extended = 0;
   msg.buf[0] = 0xFC;
@@ -67,7 +61,7 @@ void send_mode_switch_command() {
 }
 
 // M2006に電流指令を送る
-void send_current_to_motor(float current,int motor_id,uint32_t can_tx_id) {
+void send_current_to_motor(float current, struct motor &data) {
   constexpr float MAX_CUR = 10.0;
   constexpr int MAX_CUR_VAL = 10000;
 
@@ -76,13 +70,13 @@ void send_current_to_motor(float current,int motor_id,uint32_t can_tx_id) {
   int16_t transmit_val = static_cast<int16_t>(val);
 
   CAN_message_t msg;
-  msg.id = can_tx_id;
+  msg.id = data.can_tx_id;
   msg.len = 8;
   msg.flags.extended = 0;
   for (int i = 0; i < 8; i++) msg.buf[i] = 0;
 
-  msg.buf[(motor_id - 1) * 2]     = (transmit_val >> 8) & 0xFF;
-  msg.buf[(motor_id - 1) * 2 + 1] = transmit_val & 0xFF;
+  msg.buf[(data.motor_id - 1) * 2]     = (transmit_val >> 8) & 0xFF;
+  msg.buf[(data.motor_id - 1) * 2 + 1] = transmit_val & 0xFF;
 
   if (Can0.write(msg)) {
     Serial.println("Current Command: OK");
@@ -90,11 +84,12 @@ void send_current_to_motor(float current,int motor_id,uint32_t can_tx_id) {
     Serial.println("Current Command: NO");
   }
 }
-
 void setup() {
   Serial.begin(115200);
   //while (!Serial);
-
+  Init(motor_1,1,0);
+  Init(motor_2,2,0);
+  Init(motor_gm,1,1);
   // CANの初期化
   Can0.begin();
   Can0.setBaudRate(1000000);  // 1 Mbps
@@ -106,7 +101,7 @@ void setup() {
   delay(500);  // 安定化待ち
 
   Serial.println("CAN initialized. Sending mode switch...");
-  send_mode_switch_command();
+  send_mode_switch_command(motor_1,motor_2);
   //------ここまでがCANの初期設定動作。以降PCA9685の初期設定動作。
   pwm.begin();  // PCA9685の初期化（I2C通信開始）
   // 内部オシレータの周波数を明示的に設定（デフォルトは25MHzだが誤差がある）
@@ -142,36 +137,36 @@ void setServoPulse(uint8_t n, double pulse) {
 }
 
 void loop() {
-  d_in0_state=digitalRead(d_in0);
-  d_in1_state=digitalRead(d_in1);
-  d_in2_state=digitalRead(d_in2);
-  d_in3_state=digitalRead(d_in3);
-  d_in1_state=d_in1_state<<1;
-  d_in2_state=d_in2_state<<2;
-  d_in3_state=d_in3_state<<3;
-  d_integrated=d_in0_state+d_in1_state+d_in2_state+d_in3_state;
+  d_in0_state = digitalRead(d_in0);
+  d_in1_state = digitalRead(d_in1);
+  d_in2_state = digitalRead(d_in2);
+  d_in3_state = digitalRead(d_in3);
+  d_in1_state = d_in1_state << 1;
+  d_in2_state = d_in2_state << 2;
+  d_in3_state = d_in3_state << 3;
+  d_integrated = d_in0_state + d_in1_state + d_in2_state + d_in3_state;
   //めんどくさいのでビット反転してない
   //unsigned long now = millis();
   switch(d_integrated){
     case 0x01:
       //通常、無入力なら0x00になってる
       current_A = 2.0;
-      send_current_to_motor(current_A,motor_id_1,can_tx_id);
+      send_current_to_motor(current_A,motor_1);
       delay(10);  // 周期制御（10ms）
       break;
     case 0x02:
       current_A = -2.0;
-      send_current_to_motor(current_A,motor_id_1,can_tx_id);
+      send_current_to_motor(current_A,motor_1);
       delay(10);  // 周期制御（10ms）
       break;
     case 0x03:
       current_A = 3.0;
-      send_current_to_motor(current_A,motor_id_gm,can_tx_id_gm);
+      send_current_to_motor(current_A,motor_gm);
       delay(10);
       break;
     case 0x04:
       current_A = -3.0;
-      send_current_to_motor(current_A,motor_id_gm,can_tx_id_gm);
+      send_current_to_motor(current_A,motor_gm);
       delay(10);
       break;
     case 0x05:
@@ -204,23 +199,21 @@ void loop() {
       break;
     case 0x09:
       current_A = 2.0;
-      send_current_to_motor(current_A,motor_id_2,can_tx_id);
+      send_current_to_motor(current_A,motor_2);
       delay(10);  // 周期制御（10ms）
       break;
     case 0x0A:
       current_A = -2.0;
-      send_current_to_motor(current_A,motor_id_2,can_tx_id);
+      send_current_to_motor(current_A,motor_2);
       delay(10);  // 周期制御（10ms）
       break;
     default:
       //無入力状態。アームを現状維持できるようにする
       current_A = 0.0;
-      send_current_to_motor(current_A,motor_id_gm,can_tx_id_gm);
-      send_current_to_motor(current_A,motor_id_1,can_tx_id);
-      send_current_to_motor(current_A,motor_id_2,can_tx_id);
+      send_current_to_motor(current_A,motor_gm);
+      send_current_to_motor(current_A,motor_1);
+      send_current_to_motor(current_A,motor_2);
       delay(10);  // 周期制御（10ms）
       break;
   }
-
-
 }
