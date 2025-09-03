@@ -8,7 +8,7 @@
 Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver();
 
 // Teensy 4.0 の CAN1 を使用（RX=22, TX=23）
-FlexCAN_T4<CAN1, RX_SIZE_256, TX_SIZE_16> Can0;
+FlexCAN_T4<CAN1, RX_SIZE_256, TX_SIZE_16> Can1;
 
 // サーボのパルス幅（4096ステップ中の値）
 #define SERVOMIN  150  // サーボの最小パルス幅（最も左、または最も上など）
@@ -21,13 +21,16 @@ FlexCAN_T4<CAN1, RX_SIZE_256, TX_SIZE_16> Can0;
 #define SERVO_FREQ 50  // サーボモーターは通常50Hz（20ms周期）で駆動
 
 // 現在動作中のサーボチャンネル
-uint8_t servonum = 0;
-//uint8_t servonum1 = 1;
+int8_t servonum = 0;
+int8_t servonum1 = 1;
 
-motor motor_1;
-motor motor_2;
-motor motor_3;
-motor motor_gm;
+motor m2006_r;
+motor m2006_l;
+motor gm6020;
+
+motor_data m2006_r_data;
+motor_data m2006_l_data;
+motor_data gm6020_data;
 
 float current_A = 0.0;  // 初期電流
 
@@ -35,6 +38,7 @@ int d_in0 = 7; //もともと10  7
 int d_in1 = 8; //もともと9  8
 int d_in2 = 9; //もともと8  9
 int d_in3 = 10; //もともと7  10
+
 int d_in0_state = 0, d_in1_state = 0, d_in2_state = 0, d_in3_state=0;//ESP32の出力が接続されたピン
 int d_integrated=0;//ESP32の信号を統合したもの(現在4ビット)
 
@@ -42,11 +46,10 @@ uint16_t microsec = 1500;
 uint16_t microsec1 = 1500;
 
 // モード切り替えコマンド（最初に1回送る）
-void send_mode_switch_command(struct motor &data1, struct motor &data2,struct motor &data3) {
+void send_mode_switch_command(struct motor &data_1, struct motor &data_2) {
   CAN_message_t msg;
-  msg.id = data1.mode_switch_id;
-  msg.id = data2.mode_switch_id;
-  msg.id = data3.mode_switch_id;
+  msg.id = data_1.mode_switch_id;
+  msg.id = data_2.mode_switch_id;
   msg.len = 8;
   msg.flags.extended = 0;
   msg.buf[0] = 0xFC;
@@ -79,26 +82,38 @@ void send_current_to_motor(float current, struct motor &data) {
   msg.buf[(data.motor_id - 1) * 2]     = (transmit_val >> 8) & 0xFF;
   msg.buf[(data.motor_id - 1) * 2 + 1] = transmit_val & 0xFF;
 
-  if (Can0.write(msg)) {
+  if (Can1.write(msg)) {
     Serial.println("Current Command: OK");
   } else {
     Serial.println("Current Command: NO");
   }
 }
+void reception_current_to_motor(){
+    CAN_message_t msg;
+    while(can1.read(msg)){
+        if(msg.id == 0x201){
+            m2006_l_data.M_angle = rxmsg.buf[0] * 256 + rxmsg.buf[1];
+            Serial.println(m2006_l_data.M_angle);
+        }
+        if(msg.id == 0x202){
+            m2006_r_data.M_angle = rxmsg.buf[0] * 256 + rxmsg.buf[1];
+            Serial.println(m2006_r_data.M_angle);            
+        }
+    }    
+}
 void setup() {
   Serial.begin(115200);
   //while (!Serial);
-  InitMotor(motor_1,1,0);
-  InitMotor(motor_2,2,0);
-  InitMotor(motor_2,3,0);
-  InitMotor(motor_gm,2,1);
+  InitMotor(m2006_r,1,0);
+  InitMotor(m2006_r,2,0);
+  InitMotor(gm6020,1,1);
   // CANの初期化
-  Can0.begin();
-  Can0.setBaudRate(1000000);  // 1 Mbps
-  Can0.setMaxMB(16);          // メールボックス数
-  Can0.enableFIFO();          // FIFO受信（今回は使わないけど推奨）
-  Can0.enableFIFOInterrupt();
-  Can0.onReceive(nullptr);    // 受信コールバック不要
+  Can1.begin();
+  Can1.setBaudRate(1000000);  // 1 Mbps
+  Can1.setMaxMB(16);          // メールボックス数
+  Can1.enableFIFO();          // FIFO受信（今回は使わないけど推奨）
+  Can1.enableFIFOInterrupt();
+  Can1.onReceive(nullptr);    // 受信コールバック不要
 
   delay(500);  // 安定化待ち
 
@@ -214,9 +229,9 @@ void loop() {
       current_A = 0.0;
       send_current_to_motor(current_A,motor_1);
       send_current_to_motor(current_A,motor_2);
-      send_current_to_motor(current_A,motor_3);
       send_current_to_motor(current_A,motor_gm);
       delay(10);  // 周期制御（10ms）
       break;
   }
+  reception_current_to_motor()
 }

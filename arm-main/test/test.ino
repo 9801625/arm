@@ -15,5 +15,5 @@ void setup() {
  pwm.setPWMFreq(50);   //PWM周期を50Hzに設定 
  servo_write(1,20);
 }          
-void loop{
+void loop(){
 }
